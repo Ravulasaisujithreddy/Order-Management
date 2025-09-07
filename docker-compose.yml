@@ -1,0 +1,331 @@
+version: "3.8"
+
+services:
+  # Infrastructure Services
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    labels:
+      co.elastic.logs/enabled: "false"
+    networks:
+      - shopping_network
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    labels:
+      co.elastic.logs/enabled: "false"
+    ports:
+      - "9092:9092"
+    networks:
+      - shopping_network
+
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    container_name: kafdrop
+    restart: "no"
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKER_CONNECT: kafka:9092
+    labels:
+      co.elastic.logs/enabled: "false"
+    depends_on:
+      - kafka
+    networks:
+      - shopping_network
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: shopping_cart
+      MYSQL_USER: shopping_user
+      MYSQL_PASSWORD: shopping_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - shopping_network
+    labels:
+      co.elastic.logs/enabled: "false"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:6.2-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - shopping_network
+    labels:
+      co.elastic.logs/enabled: "false"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ELK Stack for Centralized Logging - Configure before application services
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.16.2
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - shopping_network
+    labels:
+      co.elastic.logs/enabled: "false"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.16.2
+    container_name: logstash
+    environment:
+      LS_JAVA_OPTS: "-Xms256m -Xmx256m"
+    volumes:
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+    ports:
+      - "5044:5044"
+    networks:
+      - shopping_network
+    labels:
+      co.elastic.logs/enabled: "false"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9600" ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    # Add restart policy
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.16.2
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    networks:
+      - shopping_network
+    depends_on:
+      - elasticsearch
+    labels:
+      co.elastic.logs/enabled: "false"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:7.16.2
+    user: root
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - logstash
+    labels:
+      co.elastic.logs/enabled: "false"
+    networks:
+      - shopping_network
+  # Application Services - These now depend on logstash
+  product-service:
+    build: ./product-service
+    container_name: product-service
+    depends_on:
+      - mysql
+      - kafka
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/shopping_cart
+      SPRING_DATASOURCE_USERNAME: shopping_user
+      SPRING_DATASOURCE_PASSWORD: shopping_password
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SERVER_PORT: 8081
+    ports:
+      - "8081:8081"
+    labels:
+      co.elastic.logs/enabled: "true"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - shopping_network
+
+
+  cart-service:
+    build: ./cart-service
+    container_name: cart-service
+    depends_on:
+      - redis
+      - kafka
+      - product-service
+    environment:
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PRODUCT_SERVICE_URL: http://product-service:8081
+      SERVER_PORT: 8082
+    ports:
+      - "8082:8082"
+    labels:
+      co.elastic.logs/enabled: "true"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - shopping_network
+
+  order-service:
+    build: ./order-service
+    container_name: order-service
+    depends_on:
+      - mysql
+      - kafka
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/shopping_cart
+      SPRING_DATASOURCE_USERNAME: shopping_user
+      SPRING_DATASOURCE_PASSWORD: shopping_password
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SERVER_PORT: 8083
+    ports:
+      - "8083:8083"
+    labels:
+      co.elastic.logs/enabled: "true"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - shopping_network
+
+
+  inventory-service:
+    build: ./inventory-service
+    container_name: inventory-service
+    depends_on:
+      - mysql
+      - kafka
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/shopping_cart
+      SPRING_DATASOURCE_USERNAME: shopping_user
+      SPRING_DATASOURCE_PASSWORD: shopping_password
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SERVER_PORT: 8084
+    ports:
+      - "8084:8084"
+    labels:
+      co.elastic.logs/enabled: "true"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - shopping_network
+
+
+  notification-service:
+    build: ./notification-service
+    container_name: notification-service
+    depends_on:
+      - kafka
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SERVER_PORT: 8085
+    ports:
+      - "8085:8085"
+    labels:
+      co.elastic.logs/enabled: "true"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - shopping_network
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - cart-service
+      - order-service
+      - product-service
+      - inventory-service
+      - notification-service
+    networks:
+      - shopping_network
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+          - tempo
+    networks:
+      - shopping_network
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    ports:
+      - "3200:3200"    # Tempo HTTP port
+      - "4317:4317"    # OTLP gRPC for OpenTelemetry SDKs
+      - "4318:4318"    # OTLP HTTP (optional)
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    networks:
+      - shopping_network
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
+  grafana-storage:
+networks:
+  shopping_network:
+    driver: bridge

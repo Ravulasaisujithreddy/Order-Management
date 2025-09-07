@@ -1,0 +1,17 @@
+filebeat.autodiscover:
+  providers:
+    - type: docker
+      hints.enabled: true
+      templates:
+        - condition:
+            equals:
+              docker.container.labels.co.elastic.logs/enabled: "true"
+          config:
+            - type: container
+              paths:
+                - /var/lib/docker/containers/${data.docker.container.id}/*.log
+              processors:
+                - add_docker_metadata: ~
+
+output.logstash:
+  hosts: ["logstash:5044"]

@@ -1,0 +1,6 @@
+2025-04-10T22:30:41.571-04:00  INFO 2404 --- [cart-service] [main] c.p.c.CartServiceApplicationTests        : Starting CartServiceApplicationTests using Java 23.0.1 with PID 2404 (started by saisujithreddyravula in /Users/saisujithreddyravula/Desktop/order-management/cart-service)
+2025-04-10T22:30:41.571-04:00  INFO 2404 --- [cart-service] [main] c.p.c.CartServiceApplicationTests        : No active profile set, falling back to 1 default profile: "default"
+2025-04-10T22:30:41.785-04:00  INFO 2404 --- [cart-service] [main] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2025-04-10T22:30:41.786-04:00  INFO 2404 --- [cart-service] [main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2025-04-10T22:30:41.798-04:00  INFO 2404 --- [cart-service] [main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 4 ms. Found 0 Redis repository interfaces.
+2025-04-10T22:30:42.236-04:00  INFO 2404 --- [cart-service] [main] c.p.c.CartServiceApplicationTests        : Started CartServiceApplicationTests in 0.761 seconds (process running for 1.125)
